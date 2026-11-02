@@ -7,7 +7,7 @@ Sube uno o varios archivos. Elimina el prefijo `Student_YYYY_MM_DD__HH_MM_` y co
 
 ## 2. Pasar notas a iDoceo
 - Admite exportaciones de iDoceo `.xls` y `.xlsx`.
-- Admite resultados de Socrative `.xlsx`, `.xls` y `.csv`.
+- Admite uno o varios resultados de Socrative `.xlsx`, `.xls` y `.csv` simultáneamente.
 - Detecta la fila de encabezados de Socrative aunque haya información previa.
 - Utiliza `Nombre` y `Apellidos` de iDoceo para identificar al alumnado.
 - Tolera tildes, diferencias pequeñas y nombres parcialmente distintos.

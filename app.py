@@ -168,13 +168,14 @@ with tab_grades:
             key="idoceo_file"
         )
     with col_b:
-        socrative_file = st.file_uploader(
-            "2. Resultados de Socrative (.xlsx, .xls o .csv)",
+        socrative_files = st.file_uploader(
+            "2. Uno o varios archivos de resultados de Socrative (.xlsx, .xls o .csv)",
             type=["xlsx", "xls", "csv"],
-            key="socrative_file"
+            accept_multiple_files=True,
+            key="socrative_files"
         )
 
-    if idoceo_file and socrative_file:
+    if idoceo_file and socrative_files:
         try:
             wb = read_idoceo_as_workbook(idoceo_file)
             sheet_name = st.selectbox("Hoja de iDoceo", wb.sheetnames, key="idoceo_sheet")
@@ -213,34 +214,48 @@ with tab_grades:
 
             st.caption(f"Alumnado localizado en iDoceo: {len(roster)}")
 
-            # Leer el archivo de Socrative. Sus exportaciones suelen llevar metadatos
-            # arriba y la fila Student Name / Score (%) como encabezado.
-            raw_socrative = socrative_file.getvalue()
-            suffix = Path(socrative_file.name).suffix.lower()
-            if suffix in (".xlsx", ".xlsm"):
-                raw_preview = pd.read_excel(io.BytesIO(raw_socrative), header=None)
-            elif suffix == ".xls":
-                raw_preview = pd.read_excel(io.BytesIO(raw_socrative), header=None, engine="xlrd")
-            else:
-                raw_preview = pd.read_csv(io.BytesIO(raw_socrative), header=None, encoding="utf-8-sig")
+            # Leer uno o varios archivos de Socrative. Cada exportación puede
+            # tener metadatos antes de la fila Student Name / Score (%).
+            source_frames = []
+            source_file_errors = []
+            for socrative_file in socrative_files:
+                raw_socrative = socrative_file.getvalue()
+                suffix = Path(socrative_file.name).suffix.lower()
+                try:
+                    if suffix in (".xlsx", ".xlsm"):
+                        raw_preview = pd.read_excel(io.BytesIO(raw_socrative), header=None)
+                    elif suffix == ".xls":
+                        raw_preview = pd.read_excel(io.BytesIO(raw_socrative), header=None, engine="xlrd")
+                    else:
+                        raw_preview = pd.read_csv(io.BytesIO(raw_socrative), header=None, encoding="utf-8-sig")
 
-            header_idx = None
-            for i in range(min(len(raw_preview), 30)):
-                vals = [str(v).strip().lower() for v in raw_preview.iloc[i].tolist()]
-                if any(v in ("student name", "student", "nombre", "nombre del alumno") for v in vals):
-                    header_idx = i
-                    break
-            if header_idx is None:
-                header_idx = 0
+                    header_idx = None
+                    for i in range(min(len(raw_preview), 30)):
+                        vals = [str(v).strip().lower() for v in raw_preview.iloc[i].tolist()]
+                        if any(v in ("student name", "student", "nombre", "nombre del alumno") for v in vals):
+                            header_idx = i
+                            break
+                    if header_idx is None:
+                        header_idx = 0
 
-            if suffix in (".xlsx", ".xlsm"):
-                source_df = pd.read_excel(io.BytesIO(raw_socrative), header=header_idx)
-            elif suffix == ".xls":
-                source_df = pd.read_excel(io.BytesIO(raw_socrative), header=header_idx, engine="xlrd")
-            else:
-                source_df = pd.read_csv(io.BytesIO(raw_socrative), header=header_idx, encoding="utf-8-sig")
+                    if suffix in (".xlsx", ".xlsm"):
+                        frame = pd.read_excel(io.BytesIO(raw_socrative), header=header_idx)
+                    elif suffix == ".xls":
+                        frame = pd.read_excel(io.BytesIO(raw_socrative), header=header_idx, engine="xlrd")
+                    else:
+                        frame = pd.read_csv(io.BytesIO(raw_socrative), header=header_idx, encoding="utf-8-sig")
+                    frame["_Archivo de origen"] = socrative_file.name
+                    source_frames.append(frame)
+                except Exception as exc:
+                    source_file_errors.append(f"{socrative_file.name}: {exc}")
 
-            source_cols = list(source_df.columns)
+            if not source_frames:
+                st.error("No se ha podido leer ningún archivo de Socrative. " + " | ".join(source_file_errors))
+                st.stop()
+
+            # Une los resultados ordinarios y los de dislexia en una única tabla.
+            source_df = pd.concat(source_frames, ignore_index=True, sort=False)
+            source_cols = [c for c in source_df.columns if c != "_Archivo de origen"]
             name_default = next((i for i, c in enumerate(source_cols) if str(c).strip().lower() in ("student name", "student", "nombre", "nombre del alumno")), 0)
             score_default = next((i for i, c in enumerate(source_cols) if "score (%)" in str(c).lower() or "porcentaje" in str(c).lower()), None)
             score_mode_default = score_default is not None
@@ -258,7 +273,10 @@ with tab_grades:
             if not use_percent:
                 max_score = st.number_input("Puntuación máxima del ejercicio", min_value=0.01, value=19.0, step=1.0, key="soc_max")
             threshold = st.slider("Umbral mínimo de coincidencia de nombres", 50, 100, 78, key="match_threshold")
-            st.caption("El programa compara nombre y apellidos sin distinguir mayúsculas, tildes ni pequeños cambios. Las coincidencias dudosas se muestran para que puedas revisarlas.")
+            st.caption("El programa compara nombre y apellidos sin distinguir mayúsculas, tildes ni pequeños cambios. Las coincidencias dudosas se muestran para que puedas revisarlas. Puedes cargar juntos el archivo general y el archivo adaptado de dislexia.")
+
+            if source_file_errors:
+                st.warning("No se han podido leer algunos archivos: " + " | ".join(source_file_errors))
 
             if st.button("Preparar notas para iDoceo", type="primary", use_container_width=True, key="process_grades"):
                 score_by_student = {}
@@ -318,6 +336,7 @@ with tab_grades:
                 st.session_state["grade_ambiguous"] = ambiguous
                 st.session_state["grade_count"] = len(score_by_student)
                 st.session_state["grade_colname"] = new_column.strip() or "Nota"
+                st.session_state["grade_source_files"] = [f.name for f in socrative_files]
 
         except Exception as exc:
             st.error(f"No se han podido leer los archivos: {exc}")
